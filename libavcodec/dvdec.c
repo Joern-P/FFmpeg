@@ -49,6 +49,7 @@
 #include "internal.h"
 #include "put_bits.h"
 #include "simple_idct.h"
+#include "thread.h"
 
 typedef struct BlockInfo {
     const uint32_t *factor_table;
@@ -195,6 +196,12 @@ static av_cold int dvvideo_decode_init(AVCodecContext *avctx)
 
     s->idct_put[0] = idsp.idct_put;
     s->idct_put[1] = ff_simple_idct248_put;
+
+    static const enum AVPixelFormat pix_fmts[] = {
+       AV_PIX_FMT_YUV420P,
+       AV_PIX_FMT_NONE
+    };
+    avctx->pix_fmt = ff_get_format(avctx, pix_fmts);
 
     return ff_dvvideo_init(avctx);
 }

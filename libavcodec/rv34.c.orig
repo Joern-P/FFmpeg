@@ -1499,11 +1499,7 @@ av_cold int ff_rv34_decode_init(AVCodecContext *avctx)
     ff_mpv_decode_init(s, avctx);
     s->out_format = FMT_H263;
 
-    static const enum AVPixelFormat pix_fmts[] = {
-       AV_PIX_FMT_YUV420P,
-       AV_PIX_FMT_NONE
-    };
-    avctx->pix_fmt = ff_get_format(avctx, pix_fmts);
+    avctx->pix_fmt = AV_PIX_FMT_YUV420P;
     avctx->has_b_frames = 1;
     s->low_delay = 0;
 
