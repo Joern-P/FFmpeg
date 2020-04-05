@@ -36,6 +36,7 @@
 #include "libavutil/frame.h"
 #include "libavutil/hwcontext.h"
 #include "libavutil/hwcontext_drm.h"
+#include "libavutil/mastering_display_metadata.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/log.h"
 
@@ -45,7 +46,7 @@
 #endif
 
 #define RECEIVE_FRAME_TIMEOUT   100
-#define FRAMEGROUP_MAX_FRAMES   16
+#define FRAMEGROUP_MAX_FRAMES   24
 #define INPUT_MAX_PACKETS       4
 
 #define FPS_UPDATE_INTERVAL     120
@@ -57,6 +58,7 @@ typedef struct {
 
     char first_packet;
     char eos_reached;
+    int errors;
 
     AVBufferRef *frames_ref;
     AVBufferRef *device_ref;
@@ -85,6 +87,7 @@ static MppCodingType rkmpp_get_codingtype(AVCodecContext *avctx)
     switch (avctx->codec_id) {
     case AV_CODEC_ID_H264:          return MPP_VIDEO_CodingAVC;
     case AV_CODEC_ID_HEVC:          return MPP_VIDEO_CodingHEVC;
+    case AV_CODEC_ID_MPEG2VIDEO:    return MPP_VIDEO_CodingMPEG2;
     case AV_CODEC_ID_VP8:           return MPP_VIDEO_CodingVP8;
     case AV_CODEC_ID_VP9:           return MPP_VIDEO_CodingVP9;
     default:                        return MPP_VIDEO_CodingUnused;
@@ -460,6 +463,61 @@ static void rkmpp_update_fps(AVCodecContext *avctx)
            fps, decoder->frames);
 }
 
+static int rkmpp_hevc_mastering_display(AVFrame *frame, MppFrameMasteringDisplayMetadata mastering_display)
+{
+    // HEVC uses a g,b,r ordering, which we convert to a more natural r,g,b
+    AVMasteringDisplayMetadata *metadata;
+    const int mapping[3] = {2, 0, 1};
+    const int chroma_den = 50000;
+    const int luma_den = 10000;
+    int i;
+
+    AVFrameSideData *sd = av_frame_get_side_data(frame, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA);
+    if (sd)
+        metadata = (AVMasteringDisplayMetadata *)sd->data;
+    else
+        metadata = av_mastering_display_metadata_create_side_data(frame);
+    if (!metadata)
+        return AVERROR(ENOMEM);
+
+    for (i = 0; i < 3; i++) {
+        const int j = mapping[i];
+        metadata->display_primaries[i][0].num = mastering_display.display_primaries[j][0];
+        metadata->display_primaries[i][0].den = chroma_den;
+        metadata->display_primaries[i][1].num = mastering_display.display_primaries[j][1];
+        metadata->display_primaries[i][1].den = chroma_den;
+    }
+    metadata->white_point[0].num = mastering_display.white_point[0];
+    metadata->white_point[0].den = chroma_den;
+    metadata->white_point[1].num = mastering_display.white_point[1];
+    metadata->white_point[1].den = chroma_den;
+
+    metadata->max_luminance.num = mastering_display.max_luminance;
+    metadata->max_luminance.den = luma_den;
+    metadata->min_luminance.num = mastering_display.min_luminance;
+    metadata->min_luminance.den = luma_den;
+    metadata->has_luminance = 1;
+    metadata->has_primaries = 1;
+    return 0;
+}
+
+static int rkmpp_hevc_content_light(AVFrame *frame, MppFrameContentLightMetadata content_light)
+{
+    AVContentLightMetadata *metadata;
+
+    AVFrameSideData *sd = av_frame_get_side_data(frame, AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
+    if (sd)
+        metadata = (AVContentLightMetadata *)sd->data;
+    else
+        metadata = av_content_light_metadata_create_side_data(frame);
+    if (!metadata)
+        return AVERROR(ENOMEM);
+
+    metadata->MaxCLL  = content_light.MaxCLL;
+    metadata->MaxFALL = content_light.MaxFALL;
+    return 0;
+}
+
 static int rkmpp_retrieve_frame(AVCodecContext *avctx, AVFrame *frame)
 {
     RKMPPDecodeContext *rk_context = avctx->priv_data;
@@ -503,6 +561,11 @@ retry:
             avctx->coded_width = FFALIGN(avctx->width, 64);
             avctx->coded_height = FFALIGN(avctx->height, 64);
 
+            avctx->color_range = mpp_frame_get_color_range(mppframe);
+            avctx->color_primaries = mpp_frame_get_color_primaries(mppframe);
+            avctx->color_trc = mpp_frame_get_color_trc(mppframe);
+            avctx->colorspace = mpp_frame_get_colorspace(mppframe);
+
             decoder->mpi->control(decoder->ctx, MPP_DEC_SET_INFO_CHANGE_READY, NULL);
 
             av_buffer_unref(&decoder->frames_ref);
@@ -540,12 +603,13 @@ retry:
             goto fail;
         } else if (mpp_frame_get_errinfo(mppframe)) {
             av_log(avctx, AV_LOG_ERROR, "Received a errinfo frame.\n");
-            ret = AVERROR_UNKNOWN;
+            ret = (decoder->errors++ > 100) ? AVERROR_UNKNOWN : AVERROR(EAGAIN);
             goto fail;
         }
 
         // here we should have a valid frame
         av_log(avctx, AV_LOG_DEBUG, "Received a frame.\n");
+        decoder->errors = 0;
 
         // now setup the frame buffer info
         buffer = mpp_frame_get_buffer(mppframe);
@@ -605,6 +669,15 @@ retry:
             frame->color_primaries  = mpp_frame_get_color_primaries(mppframe);
             frame->color_trc        = mpp_frame_get_color_trc(mppframe);
             frame->colorspace       = mpp_frame_get_colorspace(mppframe);
+
+	    if (avctx->codec_id == AV_CODEC_ID_MPEG2VIDEO) {
+	        MppFrameRational dar = mpp_frame_get_sar(mppframe);
+            	frame->sample_aspect_ratio = av_div_q((AVRational) { dar.num, dar.den },
+                				(AVRational) { frame->width, frame->height });
+	    } else if (avctx->codec_id == AV_CODEC_ID_HEVC && frame->color_trc > AVCOL_TRC_UNSPECIFIED) {
+            	rkmpp_hevc_mastering_display(frame, mpp_frame_get_mastering_display(mppframe));
+            	rkmpp_hevc_content_light(frame, mpp_frame_get_content_light(mppframe));
+            }
 
             mode = mpp_frame_get_mode(mppframe);
             frame->interlaced_frame = ((mode & MPP_FRAME_FLAG_FIELD_ORDER_MASK) == MPP_FRAME_FLAG_DEINTERLACED);
@@ -764,6 +837,7 @@ static void rkmpp_flush(AVCodecContext *avctx)
     ret = decoder->mpi->reset(decoder->ctx);
     if (ret == MPP_OK) {
         decoder->first_packet = 1;
+	decoder->errors = 0;
         decoder->eos_reached = 0;
         decoder->last_fps_time = decoder->frames = 0;
     } else
@@ -806,6 +880,7 @@ static const AVCodecHWConfigInternal *rkmpp_hw_configs[] = {
 
 RKMPP_DEC(h264,  AV_CODEC_ID_H264,          "h264_mp4toannexb")
 RKMPP_DEC(hevc,  AV_CODEC_ID_HEVC,          "hevc_mp4toannexb")
+RKMPP_DEC(mpeg2, AV_CODEC_ID_MPEG2VIDEO,    NULL)
 RKMPP_DEC(vp8,   AV_CODEC_ID_VP8,           NULL)
 RKMPP_DEC(vp9,   AV_CODEC_ID_VP9,           NULL)
 
