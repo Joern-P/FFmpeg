@@ -28,6 +28,7 @@
 #include <dlfcn.h>
 #include <OMX_Core.h>
 #include <OMX_Component.h>
+#include <OMX_Broadcom.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -392,6 +393,10 @@ static av_cold int omx_component_init(AVCodecContext *avctx, const char *role)
     OMX_PARAM_PORTDEFINITIONTYPE in_port_params = { 0 }, out_port_params = { 0 };
     OMX_VIDEO_PARAM_PORTFORMATTYPE video_port_format = { 0 };
     OMX_VIDEO_PARAM_BITRATETYPE vid_param_bitrate = { 0 };
+#if CONFIG_OMX_RPI    
+    OMX_CONFIG_PORTBOOLEANTYPE vid_param_inline_header = { 0 };
+    OMX_CONFIG_POINTTYPE pix_aspect ={ 0 };
+#endif    
     OMX_ERRORTYPE err;
     int i;
 
@@ -515,6 +520,22 @@ static av_cold int omx_component_init(AVCodecContext *avctx, const char *role)
     err = OMX_SetParameter(s->handle, OMX_IndexParamVideoBitrate, &vid_param_bitrate);
     if (err != OMX_ErrorNone)
         av_log(avctx, AV_LOG_WARNING, "Unable to set video bitrate parameter\n");
+#if CONFIG_OMX_RPI
+    INIT_STRUCT(vid_param_inline_header);
+    vid_param_inline_header.nPortIndex = s->out_port;
+    vid_param_inline_header.bEnabled = OMX_TRUE;
+    err = OMX_SetParameter(s->handle, OMX_IndexParamBrcmVideoAVCInlineHeaderEnable, &vid_param_inline_header);
+    if (err != OMX_ErrorNone)
+        av_log(avctx, AV_LOG_WARNING, "Unable to set video inline header parameter\n");  
+        
+    INIT_STRUCT(pix_aspect);
+    pix_aspect.nPortIndex = s->out_port;
+    pix_aspect.nX = avctx->sample_aspect_ratio.num;
+    pix_aspect.nY = avctx->sample_aspect_ratio.den;
+    err = OMX_SetParameter(s->handle, OMX_IndexParamBrcmPixelAspectRatio, &pix_aspect);
+    if (err != OMX_ErrorNone)
+        av_log(avctx, AV_LOG_WARNING, "Unable to set Pixel Aspect Ratio parameter\n");     
+#endif
 
     if (avctx->codec->id == AV_CODEC_ID_H264) {
         OMX_VIDEO_PARAM_AVCTYPE avc = { 0 };
@@ -537,8 +558,10 @@ static av_cold int omx_component_init(AVCodecContext *avctx, const char *role)
         default:
             break;
         }
-        err = OMX_SetParameter(s->handle, OMX_IndexParamVideoAvc, &avc);
-        CHECK(err);
+	//avc.bFrameMBsOnly = OMX_TRUE;
+	avc.eLoopFilterMode = OMX_VIDEO_AVCLoopFilterEnable;
+	err = OMX_SetParameter(s->handle, OMX_IndexParamVideoAvc, &avc);
+	CHECK(err);
     }
 
     err = OMX_SendCommand(s->handle, OMX_CommandStateSet, OMX_StateIdle, NULL);
@@ -914,7 +937,7 @@ static const AVOption options[] = {
     { "omx_libname", "OpenMAX library name", OFFSET(libname), AV_OPT_TYPE_STRING, { 0 }, 0, 0, VDE },
     { "omx_libprefix", "OpenMAX library prefix", OFFSET(libprefix), AV_OPT_TYPE_STRING, { 0 }, 0, 0, VDE },
     { "zerocopy", "Try to avoid copying input frames if possible", OFFSET(input_zerocopy), AV_OPT_TYPE_INT, { .i64 = CONFIG_OMX_RPI }, 0, 1, VE },
-    { "profile",  "Set the encoding profile", OFFSET(profile), AV_OPT_TYPE_INT,   { .i64 = FF_PROFILE_UNKNOWN },       FF_PROFILE_UNKNOWN, FF_PROFILE_H264_HIGH, VE, "profile" },
+    { "profile",  "Set the encoding profile", OFFSET(profile), AV_OPT_TYPE_INT,   { .i64 = FF_PROFILE_H264_HIGH },       FF_PROFILE_UNKNOWN, FF_PROFILE_H264_HIGH, VE, "profile" },
     { "baseline", "",                         0,               AV_OPT_TYPE_CONST, { .i64 = FF_PROFILE_H264_BASELINE }, 0, 0, VE, "profile" },
     { "main",     "",                         0,               AV_OPT_TYPE_CONST, { .i64 = FF_PROFILE_H264_MAIN },     0, 0, VE, "profile" },
     { "high",     "",                         0,               AV_OPT_TYPE_CONST, { .i64 = FF_PROFILE_H264_HIGH },     0, 0, VE, "profile" },
