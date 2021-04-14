@@ -373,6 +373,7 @@ static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps)
 #define HWACCEL_MAX (CONFIG_HEVC_DXVA2_HWACCEL + \
                      CONFIG_HEVC_D3D11VA_HWACCEL * 2 + \
                      CONFIG_HEVC_NVDEC_HWACCEL + \
+                     CONFIG_HEVC_V4L2REQUEST_HWACCEL + \
                      CONFIG_HEVC_VAAPI_HWACCEL + \
                      CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL + \
                      CONFIG_HEVC_RPI4_8_HWACCEL + \
@@ -405,6 +406,9 @@ static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps)
 #if CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL
         *fmt++ = AV_PIX_FMT_VIDEOTOOLBOX;
 #endif
+#if CONFIG_HEVC_V4L2REQUEST_HWACCEL
+        *fmt++ = AV_PIX_FMT_DRM_PRIME;
+#endif
         break;
     case AV_PIX_FMT_YUV420P10:
 #if CONFIG_HEVC_RPI4_10_HWACCEL
@@ -425,6 +429,9 @@ static enum AVPixelFormat get_format(HEVCContext *s, const HEVCSPS *sps)
 #endif
 #if CONFIG_HEVC_NVDEC_HWACCEL
         *fmt++ = AV_PIX_FMT_CUDA;
+#endif
+#if CONFIG_HEVC_V4L2REQUEST_HWACCEL
+        *fmt++ = AV_PIX_FMT_DRM_PRIME;
 #endif
         break;
     case AV_PIX_FMT_YUV444P:
@@ -3099,10 +3106,6 @@ static int decode_nal_units(HEVCContext *s, const uint8_t *buf, int length)
     }
 
 fail:
-    if (ret < 0 && s->avctx->hwaccel && s->avctx->hwaccel->abort_frame) {
-        s->avctx->hwaccel->abort_frame(s->avctx);
-    }
-
     if (s->ref && s->threads_type == FF_THREAD_FRAME)
         ff_thread_report_progress(&s->ref->tf, INT_MAX, 0);
 
@@ -3232,7 +3235,14 @@ static int hevc_decode_frame(AVCodecContext *avctx, void *data, int *got_output,
     s->ref = NULL;
     ret    = decode_nal_units(s, avpkt->data, avpkt->size);
     if (ret < 0)
+    {
+        // Ensure that hwaccel knows this frame is over
+        if (s->avctx->hwaccel && s->avctx->hwaccel->abort_frame) {
+            s->avctx->hwaccel->abort_frame(s->avctx);
+        }
+
         return ret;
+    }
 
     if (avctx->hwaccel) {
         if (s->ref && (ret = avctx->hwaccel->end_frame(avctx)) < 0) {
@@ -3604,6 +3614,9 @@ AVCodec ff_hevc_decoder = {
 #endif
 #if CONFIG_HEVC_VIDEOTOOLBOX_HWACCEL
                                HWACCEL_VIDEOTOOLBOX(hevc),
+#endif
+#if CONFIG_HEVC_V4L2REQUEST_HWACCEL
+                               HWACCEL_V4L2REQUEST(hevc),
 #endif
 #if CONFIG_HEVC_RPI4_8_HWACCEL
                                HWACCEL_RPI4_8(hevc),
