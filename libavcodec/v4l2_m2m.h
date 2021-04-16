@@ -64,10 +64,13 @@ typedef struct V4L2m2mContext {
 
     /* generate DRM frames */
     int output_drm;
+
+    /* reference back to V4L2m2mPriv */
+    void *priv;
+    
 } V4L2m2mContext;
 
-typedef struct V4L2m2mPriv
-{
+typedef struct V4L2m2mPriv {
     AVClass *class;
 
     V4L2m2mContext *context;
@@ -85,7 +88,7 @@ typedef struct V4L2m2mPriv
  *
  * @returns 0 in success, a negative error code otherwise.
  */
-int ff_v4l2_m2m_create_context(AVCodecContext *avctx, V4L2m2mContext **s);
+int ff_v4l2_m2m_create_context(V4L2m2mPriv *priv, V4L2m2mContext **s);
 
 
 /**
@@ -95,7 +98,7 @@ int ff_v4l2_m2m_create_context(AVCodecContext *avctx, V4L2m2mContext **s);
  *
  * @returns 0 if a driver is found, a negative number otherwise.
  */
-int ff_v4l2_m2m_codec_init(AVCodecContext *avctx);
+int ff_v4l2_m2m_codec_init(V4L2m2mPriv *priv);
 
 /**
  * Releases all the codec resources if all AVBufferRefs have been returned to the
@@ -106,7 +109,7 @@ int ff_v4l2_m2m_codec_init(AVCodecContext *avctx);
  * @returns 0
  *
  */
-int ff_v4l2_m2m_codec_end(AVCodecContext *avctx);
+int ff_v4l2_m2m_codec_end(V4L2m2mPriv *priv);
 
 /**
  * Reinitializes the V4L2m2mContext when the driver cannot continue processing

@@ -157,7 +157,7 @@ int ff_v4l2_context_dequeue_packet(V4L2Context* ctx, AVPacket* pkt);
  * @param[inout] f The AVFrame to dequeue to.
  * @return 0 in case of success, AVERROR(EAGAIN) if no buffer was ready, another negative error in case of error.
  */
-int ff_v4l2_context_dequeue_frame(V4L2Context* ctx, AVFrame* f);
+int ff_v4l2_context_dequeue_frame(V4L2Context* ctx, AVFrame* f, int timeout));
 
 /**
  * Enqueues a buffer to a V4L2Context from an AVPacket

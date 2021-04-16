@@ -180,16 +180,17 @@ static int v4l2_receive_frame(AVCodecContext *avctx, AVFrame *frame)
 dequeue:
     if (!saved_avpkt.size)
         av_packet_unref(&avpkt);
-    return ff_v4l2_context_dequeue_frame(capture, frame);
+    return ff_v4l2_context_dequeue_frame(capture, frame, -1);
 }
 
 static av_cold int v4l2_decode_init(AVCodecContext *avctx)
 {
     V4L2Context *capture, *output;
     V4L2m2mContext *s;
+    V4L2m2mPriv *priv = avctx->priv_data;    
     int ret;
 
-    ret = ff_v4l2_m2m_create_context(avctx, &s);
+    ret = ff_v4l2_m2m_create_context(priv, &s);
     if (ret < 0)
         return ret;
 
@@ -239,17 +240,22 @@ static av_cold int v4l2_decode_init(AVCodecContext *avctx)
     if (ret < 0)
         return ret;
 
-    ret = ff_v4l2_m2m_codec_init(avctx);
+    ret = ff_v4l2_m2m_codec_init(priv);
     if (ret) {
-        V4L2m2mPriv *priv = avctx->priv_data;
         av_log(avctx, AV_LOG_ERROR, "can't configure decoder\n");
         s->self_ref = NULL;
         av_buffer_unref(&priv->context_ref);
 
         return ret;
     }
-
+    
+    s->avctx = avctx;
     return v4l2_prepare_decoder(s);
+}
+
+static av_cold int v4l2_decode_close(AVCodecContext *avctx)
+{
+    return ff_v4l2_m2m_codec_end(avctx->priv_data);
 }
 
 static void v4l2_flush(AVCodecContext *avctx)
@@ -305,7 +311,7 @@ static const AVCodecHWConfigInternal *v4l2_m2m_hw_configs[] = {
         .priv_class     = &v4l2_m2m_ ## NAME ## _dec_class, \
         .init           = v4l2_decode_init, \
         .receive_frame  = v4l2_receive_frame, \
-        .close          = ff_v4l2_m2m_codec_end, \
+        .close          = v4l2_decode_close, \
         .flush          = v4l2_flush, \
         .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_DRM_PRIME, \
                                                          AV_PIX_FMT_NV12, \
