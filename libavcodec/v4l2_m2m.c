@@ -361,7 +361,7 @@ int ff_v4l2_m2m_codec_init(V4L2m2mPriv *priv)
             continue;
 
         snprintf(node, sizeof(node), "/dev/%s", entry->d_name);
-        av_log(priv AV_LOG_DEBUG, "probing device %s\n", node);
+        av_log(priv, AV_LOG_DEBUG, "probing device %s\n", node);
         strncpy(s->devname, node, strlen(node) + 1);
         ret = v4l2_probe_driver(s);
         if (!ret)
